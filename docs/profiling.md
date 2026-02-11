@@ -56,7 +56,7 @@ profiling:
 | ------- | ---------------------------------------------------------------- | ---------------------------------------------- |
 | `none`  | Default. No profiling, uses `dynamo.sglang` for serving          | -                                              |
 | `torch` | PyTorch Profiler. Good for Python-level and CUDA kernel analysis | `/logs/profiles/{mode}/` (Chrome trace format) |
-| `nsys`  | NVIDIA Nsight Systems. Low-overhead GPU profiling                | `/logs/profiles/{mode}_{rank}.nsys-rep`        |
+| `nsys`  | NVIDIA Nsight Systems. Low-overhead GPU profiling                | `/logs/profiles/{mode}/` (`*.nsys-rep`)        |
 
 ## Configuration Options
 
@@ -144,7 +144,7 @@ When using `nsys`, workers are wrapped with:
 ```bash
 nsys profile -t cuda,nvtx --cuda-graph-trace=node \
   -c cudaProfilerApi --capture-range-end stop \
-  -o /logs/profiles/{mode}_{rank} \
+  -o /logs/profiles/{mode}/{name} \
   python3 -m sglang.launch_server ...
 ```
 
@@ -221,8 +221,10 @@ logs/{job_id}_{workers}_{timestamp}/
     │   └── *.json
     ├── decode/
     │   └── *.json
-    ├── prefill_0.nsys-rep  # Nsys reports (if type: nsys)
-    └── decode_0.nsys-rep
+    ├── prefill/            # Nsys reports (if type: nsys)
+    │   └── *.nsys-rep
+    └── decode/
+        └── *.nsys-rep
 ```
 
 ### Viewing Results
