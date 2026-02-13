@@ -417,7 +417,7 @@ Benchmark configuration. The `type` field determines which benchmark runner is u
 | ----------------- | ---------------------------------------------- |
 | `manual`          | No benchmark (default), manual testing mode    |
 | `sa-bench`        | Throughput/latency serving benchmark           |
-e| `sglang-bench`    | SGLang bench_serving benchmark                 |
+| `sglang-bench`    | SGLang bench_serving benchmark                 |
 | `mmlu`            | MMLU accuracy evaluation                       |
 | `gpqa`            | GPQA (Graduate-level science QA) evaluation    |
 | `longbenchv2`     | Long-context evaluation benchmark              |
