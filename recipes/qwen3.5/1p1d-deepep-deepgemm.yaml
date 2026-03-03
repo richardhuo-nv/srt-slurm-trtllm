@@ -1,6 +1,7 @@
 # Qwen3.5-397B-A17B-FP8 1P1D: Prefill TP4 (1 node) + Decode DeepEP TP8/EP8 (2 nodes)
 # Total 3 nodes: prefill simple, decode wide-EP with low_latency
-# Performance is un-verified.
+# Performance is un-verified. Accuracy testing in progress.
+# Purpose: accuracy verification (not for pareto benchmarking)
 
 name: "qwen3.5-1p1d-deepep-deepgemm"
 
