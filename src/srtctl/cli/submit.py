@@ -33,11 +33,18 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 # Import from srtctl modules
-from srtctl.core.config import get_srtslurm_setting, load_config
+from srtctl.core.config import (
+    generate_override_configs,
+    get_srtslurm_setting,
+    load_cluster_config,
+    load_config,
+    resolve_config_with_defaults,
+)
 from srtctl.core.schema import SrtConfig
 from srtctl.core.status import create_job_record
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -209,18 +216,27 @@ def submit_with_orchestrator(
     tags: list[str] | None = None,
     setup_script: str | None = None,
     output_dir: Path | None = None,
-) -> None:
+    variant_suffix: str | None = None,
+    source_config_path: Path | None = None,
+) -> str | None:
     """Submit job using the new Python orchestrator.
 
     This uses the minimal sbatch template that calls srtctl.cli.do_sweep.
 
     Args:
-        config_path: Path to YAML config file
+        config_path: Path to the resolved YAML config passed to do_sweep.
         config: Pre-loaded SrtConfig (or None to load from path)
         dry_run: If True, print script but don't submit
         tags: Optional tags for the run
         setup_script: Optional custom setup script name (overrides config)
         output_dir: Custom output directory (CLI flag, highest priority)
+        variant_suffix: If set (e.g. "base", "lowmem"), also save config_path
+                        as config_{variant_suffix}.yaml in the job output dir.
+        source_config_path: If set, saved as config.yaml instead of config_path.
+                            Used for override jobs to preserve the original file.
+
+    Returns:
+        job_id string on success, None for dry_run.
     """
 
     if config is None:
@@ -283,7 +299,9 @@ def submit_with_orchestrator(
                 job_output_dir = srtctl_source / "outputs" / job_id
         job_output_dir.mkdir(parents=True, exist_ok=True)
 
-        shutil.copy(config_path, job_output_dir / "config.yaml")
+        shutil.copy(source_config_path or config_path, job_output_dir / "config.yaml")
+        if variant_suffix:
+            shutil.copy(config_path, job_output_dir / f"config_{variant_suffix}.yaml")
         shutil.copy(script_path, job_output_dir / "sbatch_script.sh")
 
         # Build comprehensive job metadata
@@ -342,6 +360,7 @@ def submit_with_orchestrator(
         console.print(f"[dim]📁 Logs:[/] {job_output_dir}/logs")
         console.print(f"[dim]📋 Monitor:[/] tail -f {job_output_dir}/logs/sweep_{job_id}.log")
         console.print(f"[dim]📊 Queue:[/] squeue --job {job_id}")
+        return job_id
 
     except subprocess.CalledProcessError as e:
         console.print(f"[bold red]❌ sbatch failed:[/] {e.stderr}")
@@ -351,6 +370,7 @@ def submit_with_orchestrator(
         if not keep_script:
             with contextlib.suppress(OSError):
                 os.remove(script_path)
+    return None
 
 
 def submit_single(
@@ -360,7 +380,9 @@ def submit_single(
     setup_script: str | None = None,
     tags: list[str] | None = None,
     output_dir: Path | None = None,
-):
+    variant_suffix: str | None = None,
+    source_config_path: Path | None = None,
+) -> str | None:
     """Submit a single job from YAML config.
 
     Uses the orchestrator by default. This is the recommended submission method.
@@ -372,6 +394,11 @@ def submit_single(
         setup_script: Optional custom setup script name
         tags: Optional list of tags
         output_dir: Custom output directory (CLI flag, highest priority)
+        variant_suffix: If set, also save config as config_{suffix}.yaml in job output dir.
+        source_config_path: If set, saved as config.yaml (original file for override jobs).
+
+    Returns:
+        job_id string on success, None for dry_run.
     """
     if config is None and config_path:
         config = load_config(config_path)
@@ -380,13 +407,15 @@ def submit_single(
         raise ValueError("Either config_path or config must be provided")
 
     # Always use orchestrator mode
-    submit_with_orchestrator(
+    return submit_with_orchestrator(
         config_path=config_path or Path("./config.yaml"),
         config=config,
         dry_run=dry_run,
         tags=tags,
         setup_script=setup_script,
         output_dir=output_dir,
+        variant_suffix=variant_suffix,
+        source_config_path=source_config_path,
     )
 
 
@@ -547,7 +576,12 @@ def submit_directory(
 
     for i, yaml_file in enumerate(yaml_files, 1):
         relative_path = yaml_file.relative_to(directory)
-        config_type = "sweep" if (force_sweep or is_sweep_config(yaml_file)) else "single"
+        if is_override_config(yaml_file):
+            config_type = "override"
+        elif force_sweep or is_sweep_config(yaml_file):
+            config_type = "sweep"
+        else:
+            config_type = "single"
         table.add_row(str(i), str(relative_path), config_type)
 
     console.print(table)
@@ -562,8 +596,9 @@ def submit_directory(
         console.print(f"[bold]({i}/{len(yaml_files)})[/] Processing: {relative_path}")
 
         try:
-            is_sweep = force_sweep or is_sweep_config(yaml_file)
-            if is_sweep:
+            if is_override_config(yaml_file):
+                submit_override(yaml_file, dry_run=dry_run, setup_script=setup_script, tags=tags, output_dir=output_dir)
+            elif force_sweep or is_sweep_config(yaml_file):
                 submit_sweep(yaml_file, dry_run=dry_run, setup_script=setup_script, tags=tags, output_dir=output_dir)
             else:
                 submit_single(
@@ -587,6 +622,128 @@ def submit_directory(
         console.print(f" [bold red]({error_count} failed)[/]")
     else:
         console.print()
+
+
+def parse_config_arg(arg: str) -> tuple[Path, str | None]:
+    """Parse -f argument, supporting path:selector format.
+
+    Args:
+        arg: CLI argument value, e.g. "config.yaml" or "config.yaml:override_tp64"
+
+    Returns:
+        (config_path, selector) — selector is None when submitting all variants
+    """
+    if ":" in arg:
+        path_str, selector = arg.rsplit(":", 1)
+        if not path_str.strip():
+            raise ValueError("Invalid config path in selector syntax. Use '<path>:base' or '<path>:override_<name>'")
+        if selector != "base" and not selector.startswith("override_"):
+            raise ValueError(f"Invalid selector '{selector}'. Must be 'base' or 'override_<name>'")
+        return Path(path_str), selector
+    return Path(arg), None
+
+
+def is_override_config(config_path: Path) -> bool:
+    """Check if a YAML file uses override format (has a 'base' top-level key)."""
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+    except Exception:
+        logger.debug(f"Failed to parse YAML while checking override format: {config_path}", exc_info=True)
+        return False
+    if not isinstance(config, dict):
+        return False
+    return "base" in config
+
+
+def submit_override(
+    config_path: Path,
+    selector: str | None = None,
+    dry_run: bool = False,
+    setup_script: str | None = None,
+    tags: list[str] | None = None,
+    output_dir: Path | None = None,
+) -> None:
+    """Expand an override config file and submit each variant.
+
+    Loads the raw YAML, expands base + override_* via generate_override_configs(),
+    then routes each variant through submit_sweep or submit_single.
+
+    Args:
+        config_path: Path to override YAML file
+        selector: Optional selector ("base", "override_xxx", or None for all)
+        dry_run: If True, print config but don't submit
+        setup_script: Optional custom setup script name
+        tags: Optional list of tags
+        output_dir: Custom output directory
+    """
+    with open(config_path) as f:
+        raw_config = yaml.safe_load(f)
+
+    override_configs = generate_override_configs(raw_config, selector=selector)
+
+    if dry_run:
+        base_name = raw_config["base"].get("name", "unnamed")
+        selector_info = f", selector: {selector}" if selector else ""
+        console.print()
+        console.print(
+            Panel(
+                f"[bold]Override Config:[/] {base_name} ({len(override_configs)} variant{'s' if len(override_configs) != 1 else ''}{selector_info})",
+                border_style="cyan",
+            )
+        )
+        console.print()
+
+    cluster_config = load_cluster_config()
+
+    for i, (suffix, config_dict) in enumerate(override_configs, 1):
+        variant_label = "base" if suffix == "base" else f"override_{suffix}"
+        job_name = config_dict.get("name", "unnamed")
+
+        if dry_run:
+            console.print(f"[bold cyan][{i}/{len(override_configs)}][/] {variant_label}: {job_name}")
+
+        resolved = resolve_config_with_defaults(config_dict, cluster_config)
+
+        logger.info(f"Override variant: {variant_label} -> {job_name}")
+
+        # Write resolved config next to the original override YAML so the
+        # SLURM job can read it when it starts (sbatch script embeds the path).
+        variant_file = config_path.parent / f"{config_path.stem}_{suffix}.yaml"
+        with open(variant_file, "w") as f:
+            yaml.dump(resolved, f, default_flow_style=False)
+
+        if "sweep" in resolved:
+            try:
+                submit_sweep(
+                    config_path=variant_file,
+                    dry_run=dry_run,
+                    setup_script=setup_script,
+                    tags=tags,
+                    output_dir=output_dir,
+                )
+            finally:
+                # sweep writes its own per-job configs; pending file is always safe to remove
+                with contextlib.suppress(OSError):
+                    variant_file.unlink()
+        else:
+            config = SrtConfig.Schema().load(resolved)
+            submit_single(
+                config_path=variant_file,
+                config=config,
+                dry_run=dry_run,
+                setup_script=setup_script,
+                tags=tags,
+                output_dir=output_dir,
+                variant_suffix=suffix,
+                source_config_path=config_path,
+            )
+            if dry_run:
+                with contextlib.suppress(OSError):
+                    variant_file.unlink()
+            # NOTE: for real submissions, variant_file must NOT be deleted —
+            # the sbatch script references it via config_path and do_sweep
+            # reads it at job start.
 
 
 def main():
@@ -613,7 +770,14 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_common_args(p):
-        p.add_argument("-f", "--file", type=Path, required=True, dest="config", help="YAML config file or directory")
+        p.add_argument(
+            "-f",
+            "--file",
+            type=str,
+            required=True,
+            dest="config",
+            help="YAML config file, directory, or file:selector for overrides",
+        )
         p.add_argument("-o", "--output", type=Path, dest="output_dir", help="Custom output directory for job logs")
         p.add_argument("--sweep", action="store_true", help="Force sweep mode")
         p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts")
@@ -628,8 +792,11 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.config.exists():
-        console.print(f"[bold red]Config not found:[/] {args.config}")
+    # Parse config arg: supports path:selector format for overrides
+    config_path, selector = parse_config_arg(args.config)
+
+    if not config_path.exists():
+        console.print(f"[bold red]Config not found:[/] {config_path}")
         sys.exit(1)
 
     is_dry_run = args.command == "dry-run"
@@ -640,24 +807,37 @@ def main():
         output_dir = getattr(args, "output_dir", None)
 
         # Handle directory input
-        if args.config.is_dir():
+        if config_path.is_dir():
+            if selector:
+                logger.warning(f"Selector ':{selector}' ignored for directory input")
             submit_directory(
-                args.config,
+                config_path,
                 dry_run=is_dry_run,
                 setup_script=setup_script,
                 tags=tags,
                 force_sweep=args.sweep,
                 output_dir=output_dir,
             )
+        elif is_override_config(config_path):
+            submit_override(
+                config_path,
+                selector=selector,
+                dry_run=is_dry_run,
+                setup_script=setup_script,
+                tags=tags,
+                output_dir=output_dir,
+            )
         else:
-            is_sweep = args.sweep or is_sweep_config(args.config)
+            if selector:
+                logger.warning(f"Selector ':{selector}' ignored — config is not an override file")
+            is_sweep = args.sweep or is_sweep_config(config_path)
             if is_sweep:
                 submit_sweep(
-                    args.config, dry_run=is_dry_run, setup_script=setup_script, tags=tags, output_dir=output_dir
+                    config_path, dry_run=is_dry_run, setup_script=setup_script, tags=tags, output_dir=output_dir
                 )
             else:
                 submit_single(
-                    config_path=args.config,
+                    config_path=config_path,
                     dry_run=is_dry_run,
                     setup_script=setup_script,
                     tags=tags,

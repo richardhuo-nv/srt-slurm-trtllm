@@ -62,9 +62,6 @@ echo "Start: $(date)"
 echo "=========================================="
 echo ""
 
-# Copy config to output directory
-cp "{{ config_path }}" "${OUTPUT_DIR}/config.yaml"
-
 # Get head node
 HEAD_NODE=$(scontrol show hostnames ${SLURM_NODELIST} | head -n1)
 echo "Head node: ${HEAD_NODE}"

@@ -151,6 +151,71 @@ def resolve_config_with_defaults(user_config: dict[str, Any], cluster_config: di
     return config
 
 
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively deep-merge two dicts. Override values take precedence.
+
+    - dict: recursive merge
+    - list: full replacement (no append)
+    - scalar: override replaces base
+    - None value: deletes the key from result
+    """
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if value is None:
+            result.pop(key, None)
+        elif isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def generate_override_configs(
+    raw_config: dict[str, Any],
+    selector: str | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Expand a raw config with base + override_* keys into independent configs.
+
+    Args:
+        raw_config: Raw YAML dict containing 'base' and optional 'override_*' keys
+        selector: Optional selector. None=all, "base"=base only, "override_xxx"=that variant only
+
+    Returns:
+        List of (suffix, config_dict) tuples. Suffix is "base" or the override name part.
+
+    Raises:
+        ValueError: If selector specifies a non-existent override
+    """
+    base = raw_config["base"]
+
+    # Collect all override keys sorted for deterministic ordering
+    override_keys = sorted(k for k in raw_config if k.startswith("override_"))
+
+    if selector == "base":
+        return [("base", copy.deepcopy(base))]
+
+    if selector is not None:
+        if selector not in raw_config:
+            available = ", ".join(override_keys) or "(none)"
+            raise ValueError(f"Override '{selector}' not found in config. Available: {available}")
+        suffix = selector[len("override_") :]
+        merged = deep_merge(base, raw_config[selector])
+        base_name = base.get("name", "unnamed")
+        merged["name"] = f"{base_name}_{suffix}"
+        return [(suffix, merged)]
+
+    # selector=None: return base + all overrides
+    configs: list[tuple[str, dict[str, Any]]] = [("base", copy.deepcopy(base))]
+    for key in override_keys:
+        suffix = key[len("override_") :]
+        merged = deep_merge(base, raw_config[key])
+        base_name = base.get("name", "unnamed")
+        merged["name"] = f"{base_name}_{suffix}"
+        configs.append((suffix, merged))
+
+    return configs
+
+
 def get_srtslurm_setting(key: str, default: Any = None) -> Any:
     """
     Get a setting from srtslurm.yaml cluster config.

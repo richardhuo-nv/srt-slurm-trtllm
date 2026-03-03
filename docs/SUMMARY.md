@@ -10,6 +10,7 @@
 
 - [Configuration Reference](config-reference.md)
 - [Parameter Sweeps](sweeps.md)
+- [Config Overrides](config-reference.md#config-overrides)
 
 ## Architecture & Frontends
 

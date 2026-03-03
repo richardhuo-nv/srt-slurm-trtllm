@@ -19,6 +19,7 @@
   - [srtctl dry-run](#srtctl-dry-run)
 - [Output](#output)
 - [Sweep Support](#sweep-support)
+- [Config Override Support](#config-override-support)
 - [Tips](#tips)
 
 ---
@@ -240,7 +241,7 @@ srtctl apply -f <config.yaml> [options]
 
 | Flag | Description |
 |------|-------------|
-| `-f, --file` | Path to YAML config file (required) |
+| `-f, --file` | Path to YAML config file, directory, or `file:selector` for overrides (required) |
 | `--sweep` | Force sweep mode (usually auto-detected) |
 | `--setup-script` | Custom setup script from `configs/` |
 | `--tags` | Comma-separated tags for the run |
@@ -254,6 +255,15 @@ srtctl apply -f recipes/gb200-fp8/sglang-1p4d.yaml
 
 # Submit sweep (auto-detected from sweep: section)
 srtctl apply -f configs/my-sweep.yaml
+
+# Submit all override variants (base + overrides)
+srtctl apply -f config.yaml
+
+# Submit only a specific override variant
+srtctl apply -f config.yaml:override_tp64
+
+# Submit only the base config (ignore overrides)
+srtctl apply -f config.yaml:base
 
 # With tags
 srtctl apply -f config.yaml --tags "experiment-1,baseline"
@@ -271,7 +281,7 @@ srtctl dry-run -f <config.yaml> [options]
 
 | Flag | Description |
 |------|-------------|
-| `-f, --file` | Path to YAML config file (required) |
+| `-f, --file` | Path to YAML config file, directory, or `file:selector` for overrides (required) |
 | `--sweep` | Force sweep mode |
 
 **Examples:**
@@ -282,6 +292,12 @@ srtctl dry-run -f config.yaml
 
 # Preview sweep - shows job table and saves configs
 srtctl dry-run -f sweep-config.yaml
+
+# Preview all override variants
+srtctl dry-run -f override-config.yaml
+
+# Preview a specific override variant
+srtctl dry-run -f override-config.yaml:override_tp64
 ```
 
 Dry-run output includes:
@@ -314,6 +330,27 @@ sweep:
 ```
 
 This creates 4 jobs (2 × 2 Cartesian product). See [Parameter Sweeps](sweeps.md) for details.
+
+## Config Override Support
+
+Configs with a `base` top-level key are automatically detected as override configs. Each `override_<suffix>` section is deep-merged with base and submitted as a separate job.
+
+```bash
+# Submit all variants (base + all overrides)
+srtctl apply -f override-config.yaml
+
+# Submit only the tp64 override variant
+srtctl apply -f override-config.yaml:override_tp64
+
+# Submit only the base (ignoring overrides)
+srtctl apply -f override-config.yaml:base
+```
+
+The `:selector` syntax works with both `apply` and `dry-run`. If the selector is used on a non-override config, a warning is logged and the config is processed normally.
+
+Override configs also work with directory submission — override files in the directory are auto-detected and expanded.
+
+See [Config Overrides](config-reference.md#config-overrides) for full YAML syntax and merge semantics.
 
 ## Debugging Running Jobs
 

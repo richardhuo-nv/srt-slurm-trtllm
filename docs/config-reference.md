@@ -19,6 +19,7 @@ Complete reference for job configuration YAML files.
 - [health_check](#health_check)
 - [infra](#infra)
 - [sweep](#sweep)
+- [Config Overrides](#config-overrides)
 - [FormattablePath Template System](#formattablepath-template-system)
 - [container_mounts](#container_mounts)
 - [environment](#environment)
@@ -816,6 +817,85 @@ sweep:
 
 ---
 
+## Config Overrides
+
+Config overrides let you define a base config plus multiple variants in a single YAML file. Each variant deep-merges a small set of changes onto the base, and is submitted as an independent SLURM job. This eliminates the need to duplicate entire config files when testing different parameter combinations.
+
+### YAML Structure
+
+```yaml
+base:
+  name: "my-benchmark"
+  resources:
+    decode_nodes: 8
+  backend:
+    sglang_config:
+      decode:
+        tp-size: 32
+  benchmark:
+    concurrencies: [8192, 10240]
+
+override_tp64:
+  backend:
+    sglang_config:
+      decode:
+        tp-size: 64
+
+override_small:
+  resources:
+    decode_nodes: 4
+  benchmark:
+    concurrencies: [4096]
+```
+
+| Key | Description |
+|-----|-------------|
+| `base` | Required. A complete, valid config (same structure as a normal recipe). |
+| `override_<suffix>` | Optional. Partial config merged onto base. `<suffix>` is appended to the job name. |
+
+### Naming
+
+Override job names are auto-generated: `{base.name}_{suffix}`.
+
+The example above produces three jobs: `my-benchmark`, `my-benchmark_tp64`, and `my-benchmark_small`.
+
+### Deep Merge Semantics
+
+| Type | Behavior | Example |
+|------|----------|---------|
+| **Scalar** (str/int/bool) | Override replaces base | `tp-size: 32` → `tp-size: 64` |
+| **Dict** | Recursive merge — only specified keys change | Override `sglang_config.decode.tp-size: 64` leaves other decode keys untouched |
+| **List** | Full replacement (no append) | `concurrencies: [4096]` replaces `[8192, 10240]` |
+| **New key** | Added to base | Override adds fields base doesn't have |
+| **`null` value** | Deletes the key from base | `extra_mount: null` removes it |
+
+### Combining with Sweeps
+
+Overrides and sweeps can coexist in the same file. Override expansion happens first, then each variant with a `sweep:` section is expanded via Cartesian product.
+
+```yaml
+base:
+  name: "combined"
+  sweep:
+    chunked_prefill_size: [4096, 8192]
+  backend:
+    sglang_config:
+      prefill:
+        chunked-prefill-size: "{chunked_prefill_size}"
+
+override_big:
+  resources:
+    decode_nodes: 16
+```
+
+This produces **4 jobs**: base × 2 sweep + override_big × 2 sweep.
+
+### Backward Compatibility
+
+Files without a `base` top-level key are treated as normal configs — no behavior change.
+
+---
+
 ## FormattablePath Template System
 
 FormattablePath is a powerful templating system for paths that supports runtime placeholders and environment variable expansion.
@@ -1274,6 +1354,56 @@ sweep:
   parameters:
     isl: [512, 1024, 2048, 4096]
     osl: [128, 256, 512, 1024]
+```
+
+### Config Override Example
+
+```yaml
+base:
+  name: "disagg-fp8-benchmark"
+
+  model:
+    path: "deepseek-r1"
+    container: "latest"
+    precision: "fp8"
+
+  resources:
+    gpu_type: "h100"
+    gpus_per_node: 8
+    prefill_nodes: 2
+    prefill_workers: 2
+    decode_nodes: 8
+    decode_workers: 8
+
+  backend:
+    sglang_config:
+      prefill:
+        tp-size: 8
+      decode:
+        tp-size: 8
+
+  benchmark:
+    type: "sa-bench"
+    isl: 1024
+    osl: 8192
+    concurrencies: [8192, 10240]
+
+# Use TP=64 for both prefill and decode
+override_tp64:
+  backend:
+    sglang_config:
+      prefill:
+        tp-size: 64
+      decode:
+        tp-size: 64
+
+# Smaller cluster with fewer decode nodes
+override_small:
+  resources:
+    decode_nodes: 4
+    decode_workers: 4
+  benchmark:
+    concurrencies: [4096]
 ```
 
 ### Custom Mounts and Setup
