@@ -223,6 +223,7 @@ class BenchmarkType(str, Enum):
     SA_BENCH = "sa-bench"
     ROUTER = "router"
     MOONCAKE_ROUTER = "mooncake-router"
+    TRACE_REPLAY = "trace-replay"
     MMLU = "mmlu"
     GPQA = "gpqa"
     LONGBENCHV2 = "longbenchv2"
@@ -539,6 +540,10 @@ class BenchmarkConfig:
     ttft_threshold_ms: int | None = None  # Goodput TTFT threshold in ms (default: 2000)
     itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
     random_range_ratio: float | None = None  # Random input/output length range ratio (default: 0.8)
+    num_prompts_mult: int | None = None  # Multiplier for num_prompts = concurrency * mult (default: 10)
+    num_warmup_mult: int | None = None  # Multiplier for warmup prompts = concurrency * mult (default: 2)
+    # Trace replay benchmark fields (uses aiperf with mooncake_trace dataset type)
+    trace_file: str | None = None  # Path to trace JSONL file (container path, e.g., /traces/dataset.jsonl)
     custom_tokenizer: str | None = None  # Custom tokenizer class (e.g., "module.path.ClassName")
     use_chat_template: bool = True  # Pass --use-chat-template to benchmark (default: true)
 
@@ -721,9 +726,10 @@ class DynamoConfig:
         git_ref = self.hash if self.hash else "HEAD"
         checkout_cmd = f"git checkout {self.hash}" if self.hash else ""
 
-        # Original SGLang container path, UNCHANGED
+        # Original SGLang container path
         sglang = (
-            "apt-get update -qq && apt-get install -y -qq libclang-dev > /dev/null 2>&1 && "
+            "apt-get update -qq && apt-get install -y -qq libclang-dev curl > /dev/null 2>&1 && "
+            "if ! command -v cargo &>/dev/null; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable -q && source $HOME/.cargo/env; fi && "
             "cd /sgl-workspace/ && "
             "git clone https://github.com/ai-dynamo/dynamo.git && "
             "cd dynamo && "

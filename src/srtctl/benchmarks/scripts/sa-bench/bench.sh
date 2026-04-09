@@ -60,8 +60,10 @@ TOTAL_GPUS=${9:-0}
 PREFILL_GPUS=${10:-0}
 DECODE_GPUS=${11:-0}
 RANDOM_RANGE_RATIO=${12:-0.8}
-CUSTOM_TOKENIZER=${13:-}
-USE_CHAT_TEMPLATE=${14:-true}
+NUM_PROMPTS_MULT=${13:-10}
+NUM_WARMUP_MULT=${14:-2}
+CUSTOM_TOKENIZER=${15:-}
+USE_CHAT_TEMPLATE=${16:-true}
 
 # Build optional custom tokenizer args
 CUSTOM_TOKENIZER_ARGS=()
@@ -118,7 +120,7 @@ start_all_profiling
 
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
-    num_warmup_prompts=$((concurrency * 2))
+    num_warmup_prompts=$((concurrency * NUM_WARMUP_MULT))
     python3 -u "${WORK_DIR}/benchmark_serving.py" \
         --model "${MODEL_NAME}" --tokenizer "${MODEL_PATH}" \
         --host "$HOST" --port "$PORT" \
@@ -136,7 +138,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --trust-remote-code \
         "${CUSTOM_TOKENIZER_ARGS[@]}"
 
-    num_prompts=$((concurrency * 10))
+    num_prompts=$((concurrency * NUM_PROMPTS_MULT))
     
     # Generate result filename based on mode
     if [ "$IS_DISAGGREGATED" = "true" ]; then
