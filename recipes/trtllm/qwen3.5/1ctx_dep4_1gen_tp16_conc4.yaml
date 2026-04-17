@@ -2,7 +2,7 @@ name: "1ctx_dep4_1gen_tp16_conc4"
 
 model:
   path: "/lustre/fsw/core_dlfw_ci/rihuo/nvidia_Qwen3.5-397B-A17B-NVFP4"
-  container: "/lustre/fsw/core_dlfw_ci/rihuo/dynamo-trtllm-arm64-48452032.sqsh"
+  container: "/lustre/fsw/core_dlfw_ci/rihuo/dynamo-trtllm-arm64-48799748.sqsh"
   precision: "fp4"
 
 resources:
